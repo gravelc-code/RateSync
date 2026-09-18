@@ -13,6 +13,28 @@ final class AppleMusicService {
     struct PlaybackState {
         let isPlaying: Bool
         let sampleRate: Double?
+        // Fork change: playback position, for switching just before a track ends.
+        let position: Double?
+        let duration: Double?
+        let fetchedAt: Date
+
+        init(isPlaying: Bool, sampleRate: Double?, position: Double? = nil, duration: Double? = nil, fetchedAt: Date = Date()) {
+            self.isPlaying = isPlaying
+            self.sampleRate = sampleRate
+            self.position = position
+            self.duration = duration
+            self.fetchedAt = fetchedAt
+        }
+
+        /// Seconds until the playing track ends, or nil when Music did not say.
+        func remaining(at now: Date = Date()) -> TimeInterval? {
+            PreBoundarySwitchPolicy.remaining(
+                position: position,
+                duration: duration,
+                isPlaying: isPlaying,
+                readingAge: now.timeIntervalSince(fetchedAt)
+            )
+        }
     }
 
     private var lastAppliedEQPreset: String?
@@ -43,18 +65,39 @@ final class AppleMusicService {
     }
 
     private func readPlaybackState() -> PlaybackState? {
+        // Fork change: also returns "position|duration" so the device can be
+        // switched just before the track ends. The rate field is unchanged.
         let script = """
         tell application "Music"
             if player state is playing then
-                return (sample rate of current track) as string
+                set r to (sample rate of current track) as string
+                set p to ""
+                set d to ""
+                try
+                    set p to (player position) as string
+                    set d to (duration of current track) as string
+                end try
+                return r & "|" & p & "|" & d
             end if
             return ""
         end tell
         """
+        let fetchedAt = Date()
         guard let output = execute(script, logPrefix: "[AM state]") else { return nil }
         if output.isEmpty { return PlaybackState(isPlaying: false, sampleRate: nil) }
-        if output == "missing value" { return PlaybackState(isPlaying: true, sampleRate: nil) }
-        return PlaybackState(isPlaying: true, sampleRate: Double(output))
+        let fields = output.components(separatedBy: "|")
+        let number: (Int) -> Double? = { index in
+            guard fields.indices.contains(index) else { return nil }
+            return Double(fields[index].replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces))
+        }
+        let rateField = fields.first ?? ""
+        return PlaybackState(
+            isPlaying: true,
+            sampleRate: rateField == "missing value" ? nil : number(0),
+            position: number(1),
+            duration: number(2),
+            fetchedAt: fetchedAt
+        )
     }
 
     func applyEQIfNeeded(isEnabled: Bool, isCurrentSource: Bool) {

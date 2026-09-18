@@ -45,6 +45,17 @@ class OutputDevices: ObservableObject {
     private static let maxCachedTracks = 200
     // Stability confirmation for post-window rate changes (see applyStats).
     private var pendingCandidateRate: Float64?
+    // Fork change: pre-boundary switching (see PreBoundarySwitchPolicy).
+    // All of this is touched on processQueue only.
+    /// Newest decoder format Music logged since the current track began:
+    /// the NEXT track, pre-buffered for gapless playback.
+    private var predictedNextFormat: CMPlayerStats?
+    /// The forecast made during the PREVIOUS track, i.e. about the track that
+    /// is playing now. Lets a matching report from Music skip the settling gate.
+    private var incomingForecast: CMPlayerStats?
+    private var preBoundaryWorkItem: DispatchWorkItem?
+    private var preBoundaryArmedTrack: MediaTrack?
+    private var preBoundaryHold: (track: MediaTrack, until: Date)?
     private var pendingCandidateFirstSeen: Date?
 
     /// How long a parsed OSLog result may be reused before the archive is
@@ -344,6 +355,17 @@ class OutputDevices: ObservableObject {
             Logger.switching.info("stale switch task for previous track, skip")
             return
         }
+        // Fork change: the device was just switched to the NEXT track's rate
+        // ahead of the boundary. Until the track actually changes, evaluating
+        // the outgoing track would only switch straight back. The hold expires
+        // on its own if the change never comes (e.g. playback stopped).
+        if let hold = preBoundaryHold {
+            if hold.track == currentTrack, Date() < hold.until {
+                Logger.switching.info("[PreSwitch] holding next track's rate until the track changes")
+                return
+            }
+            preBoundaryHold = nil
+        }
         // Preferred source: the playing app's own Now Playing audio format
         // (sample rate / bit depth), when it reports it. This avoids OSLog
         // parsing entirely and works without admin privileges. Apps that do
@@ -485,7 +507,25 @@ class OutputDevices: ObservableObject {
                             date: Date()
                         )
                         Logger.switching.info("[AM CurrentTrack] Music reports \(sampleRate, privacy: .public) Hz for the playing track")
-                        self.applyStats([stat], source: .appleMusicCurrentTrack, expectedTrack: expectedTrack, recursion: recursion)
+                        let confirmed = PreBoundarySwitchPolicy.forecastConfirms(
+                            forecastRate: self.incomingForecast?.sampleRate,
+                            reportedRate: sampleRate
+                        )
+                        self.applyStats(
+                            [stat],
+                            source: confirmed ? .appleMusicConfirmedForecast : .appleMusicCurrentTrack,
+                            expectedTrack: expectedTrack,
+                            recursion: recursion
+                        )
+                        // Forecasting comes AFTER the device has been dealt with:
+                        // the log store query takes several hundred ms, which is
+                        // exactly the delay a switch at a track change cannot afford.
+                        // Gate re-evaluations run every 0.5 s; only the regular
+                        // evaluations are worth a query.
+                        if !recursion {
+                            self.harvestNextTrackPrediction()
+                        }
+                        self.armPreBoundarySwitchIfNeeded(state: state, currentTrackRate: sampleRate)
                         return
                     }
                     let sinceTrackChange = self.lastTrackChangeDate.map {
@@ -503,6 +543,107 @@ class OutputDevices: ObservableObject {
                 self.runLogChainFromLogs(expectedTrack: expectedTrack, recursion: recursion)
             }
         }
+    }
+
+    // MARK: Fork change - switch just before the track ends
+
+    /// Music creates an ALAC decoder for the next track shortly after the
+    /// current one starts. With the playing track's rate now coming from
+    /// Music itself, that log line stops being a hazard and becomes a
+    /// forecast: the newest decoder format since this track began.
+    private func harvestNextTrackPrediction() {
+        guard let trackStart = lastTrackChangeDate,
+              let newest = getAllStats().first,
+              newest.date > trackStart,
+              newest.sampleRate > 0,
+              newest.sampleRate <= RateSwitchingPolicy.maxPlausibleSampleRate else { return }
+        if predictedNextFormat?.date != newest.date {
+            Logger.switching.info("[PreSwitch] newest decoder since track start: \(newest.sampleRate, privacy: .public) Hz / \(newest.bitDepth, privacy: .public) bit (the next track, if it differs from the playing one)")
+            predictedNextFormat = newest
+        }
+    }
+
+    private func disarmPreBoundarySwitch() {
+        preBoundaryWorkItem?.cancel()
+        preBoundaryWorkItem = nil
+        preBoundaryArmedTrack = nil
+    }
+
+    private func schedulePreBoundarySwitch(for track: MediaTrack, after delay: TimeInterval) {
+        preBoundaryWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.firePreBoundarySwitch(for: track)
+        }
+        preBoundaryWorkItem = item
+        preBoundaryArmedTrack = track
+        processQueue.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func armPreBoundarySwitchIfNeeded(state: AppleMusicService.PlaybackState, currentTrackRate: Double) {
+        guard let track = currentTrack,
+              preBoundaryArmedTrack != track,
+              preBoundaryHold == nil,
+              let predicted = predictedNextFormat,
+              PreBoundarySwitchPolicy.isUsefulPrediction(predictedRate: predicted.sampleRate, currentTrackRate: currentTrackRate),
+              let remaining = state.remaining() else { return }
+        guard case .arm(let delay) = PreBoundarySwitchPolicy.armDecision(remaining: remaining) else { return }
+        Logger.switching.info("[PreSwitch] armed: \(remaining, privacy: .public)s left, switching to \(predicted.sampleRate, privacy: .public) Hz in \(delay, privacy: .public)s")
+        schedulePreBoundarySwitch(for: track, after: delay)
+    }
+
+    /// Position is re-read from Music before acting, so a seek or pause since
+    /// arming can never turn this into a switch in the middle of a song.
+    private func firePreBoundarySwitch(for track: MediaTrack) {
+        guard currentTrack == track, preBoundaryArmedTrack == track else { return }
+        appleMusic.fetchPlaybackState { [weak self] state in
+            guard let self else { return }
+            self.processQueue.async {
+                guard self.currentTrack == track, self.preBoundaryArmedTrack == track else { return }
+                guard let remaining = state?.remaining() else {
+                    Logger.switching.info("[PreSwitch] aborted: Music is not playing or gave no position")
+                    self.disarmPreBoundarySwitch()
+                    return
+                }
+                switch PreBoundarySwitchPolicy.fireDecision(remaining: remaining) {
+                case .switchNow:
+                    self.disarmPreBoundarySwitch()
+                    self.performPreBoundarySwitch(for: track, remaining: remaining)
+                case .rearm(let delay):
+                    Logger.switching.info("[PreSwitch] position moved, \(remaining, privacy: .public)s left, re-arming")
+                    self.schedulePreBoundarySwitch(for: track, after: delay)
+                case .abort:
+                    Logger.switching.info("[PreSwitch] aborted with \(remaining, privacy: .public)s left")
+                    self.disarmPreBoundarySwitch()
+                }
+            }
+        }
+    }
+
+    private func performPreBoundarySwitch(for track: MediaTrack, remaining: TimeInterval) {
+        guard let predicted = predictedNextFormat,
+              let device = selectedOutputDevice ?? defaultOutputDevice,
+              let supported = device.nominalSampleRates,
+              let formats = getFormats(device: device) else { return }
+        let bitDepth = Int32(clamping: min(max(predicted.bitDepth, 1), RateSwitchingPolicy.maxPlausibleBitDepth))
+        guard let format = AudioFormatSelector.nearestFormat(
+            sampleRate: Float64(predicted.sampleRate),
+            bitDepth: bitDepth,
+            supportedSampleRates: supported,
+            formats: formats,
+            preferSampleRateMultiples: Defaults.shared.userPreferSampleRateMultiples
+        ) else { return }
+        guard format.mSampleRate != device.nominalSampleRate else {
+            Logger.switching.info("[PreSwitch] device already at the next track's rate, nothing to do")
+            return
+        }
+        Logger.switching.info("[PreSwitch] APPLYING rate \(format.mSampleRate, privacy: .public) Hz depth \(format.mBitsPerChannel, privacy: .public) with \(remaining, privacy: .public)s of the track left")
+        if enableBitDepthDetection {
+            setFormats(device: device, format: format)
+        } else {
+            device.setNominalSampleRate(format.mSampleRate)
+        }
+        updateSampleRate(format.mSampleRate, bitDepth: Int(format.mBitsPerChannel), runUserScript: true)
+        preBoundaryHold = (track, Date().addingTimeInterval(PreBoundarySwitchPolicy.holdDuration))
     }
 
     /// Log-based rate resolution plus the preset fallback, run after the
@@ -799,7 +940,10 @@ class OutputDevices: ObservableObject {
                     ? policy.lockedOverride
                     : policy.stability
                 let confirmed: Bool
-                if pendingCandidateRate == sampleRate,
+                if requiredPersistence <= 0 {
+                    // Fork change: a source that needs no settling time.
+                    confirmed = true
+                } else if pendingCandidateRate == sampleRate,
                    let seen = pendingCandidateFirstSeen {
                     confirmed = Date().timeIntervalSince(seen) >= requiredPersistence
                 } else {
@@ -1107,6 +1251,12 @@ class OutputDevices: ObservableObject {
             self.appleMusicFallbackAttemptedForTrack = false
             self.pendingCandidateRate = nil
             self.pendingCandidateFirstSeen = nil
+            // Fork change: the forecast made during the old track is about this
+            // new one; any pending pre-switch belonged to the old track.
+            self.incomingForecast = self.predictedNextFormat
+            self.predictedNextFormat = nil
+            self.preBoundaryHold = nil
+            self.disarmPreBoundarySwitch()
             self.renewTimer()
             // Track change: apply Apple Music's EQ preset for the new genre
             // (Apple Music only; no-op unless the auto-EQ switch is on).
@@ -1136,6 +1286,10 @@ class OutputDevices: ObservableObject {
             self.lastTrackChangeDate = nil
             self.pendingCandidateRate = nil
             self.pendingCandidateFirstSeen = nil
+            self.incomingForecast = nil
+            self.predictedNextFormat = nil
+            self.preBoundaryHold = nil
+            self.disarmPreBoundarySwitch()
             self.timerCancellable?.cancel()
             self.timerCancellable = nil
             self.timerCalls = 0

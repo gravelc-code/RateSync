@@ -43,6 +43,72 @@ final class SwitchingSupportTests: XCTestCase {
         )
     }
 
+    func testPreBoundarySwitchIgnoresSameRateForecast() {
+        XCTAssertFalse(
+            PreBoundarySwitchPolicy.isUsefulPrediction(predictedRate: 96_000, currentTrackRate: 96_000),
+            "an equal rate is a same-rate next track or the playing track's own decoder"
+        )
+        XCTAssertTrue(PreBoundarySwitchPolicy.isUsefulPrediction(predictedRate: 44_100, currentTrackRate: 96_000))
+        XCTAssertFalse(PreBoundarySwitchPolicy.isUsefulPrediction(predictedRate: 0, currentTrackRate: 96_000))
+    }
+
+    func testPreBoundarySwitchArmsOnlyNearTheEndOfTheTrack() {
+        XCTAssertEqual(PreBoundarySwitchPolicy.armDecision(remaining: 120), .notYet)
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.armDecision(remaining: 4.0),
+            .arm(after: 4.0 - PreBoundarySwitchPolicy.lead)
+        )
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.armDecision(remaining: 0.3),
+            .arm(after: 0),
+            "inside the lead but before the boundary: switch immediately rather than 1-2 s into the next song"
+        )
+        XCTAssertEqual(PreBoundarySwitchPolicy.armDecision(remaining: 0.05), .tooLate)
+        XCTAssertEqual(PreBoundarySwitchPolicy.armDecision(remaining: -3), .tooLate)
+    }
+
+    func testPreBoundarySwitchNeverFiresInTheMiddleOfASong() {
+        XCTAssertEqual(PreBoundarySwitchPolicy.fireDecision(remaining: PreBoundarySwitchPolicy.lead), .switchNow)
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.fireDecision(remaining: 3.0),
+            .rearm(after: 3.0 - PreBoundarySwitchPolicy.lead),
+            "a small seek back since arming re-schedules instead of switching early"
+        )
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.fireDecision(remaining: 150),
+            .abort,
+            "a seek to the middle of the song since arming must not switch the device"
+        )
+        XCTAssertEqual(PreBoundarySwitchPolicy.fireDecision(remaining: -0.2), .abort)
+        XCTAssertEqual(PreBoundarySwitchPolicy.fireDecision(remaining: .nan), .abort)
+    }
+
+    func testRemainingTimeAccountsForAgeOfTheReading() {
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.remaining(position: 200, duration: 210, isPlaying: true, readingAge: 2) ?? -1,
+            8,
+            accuracy: 0.001
+        )
+        XCTAssertNil(PreBoundarySwitchPolicy.remaining(position: 200, duration: 210, isPlaying: false, readingAge: 0))
+        XCTAssertNil(PreBoundarySwitchPolicy.remaining(position: nil, duration: 210, isPlaying: true, readingAge: 0))
+        XCTAssertNil(PreBoundarySwitchPolicy.remaining(position: 10, duration: 0, isPlaying: true, readingAge: 0))
+    }
+
+    func testConfirmedForecastSwitchesWithoutSettlingTime() {
+        XCTAssertTrue(PreBoundarySwitchPolicy.forecastConfirms(forecastRate: 48_000, reportedRate: 48_000))
+        XCTAssertFalse(PreBoundarySwitchPolicy.forecastConfirms(forecastRate: 44_100, reportedRate: 48_000))
+        XCTAssertFalse(PreBoundarySwitchPolicy.forecastConfirms(forecastRate: nil, reportedRate: 48_000))
+
+        let policy = RateSwitchingPolicy.gatePolicy(for: .appleMusicConfirmedForecast)
+        XCTAssertEqual(policy.boundary, 0, accuracy: 0.001)
+        XCTAssertEqual(policy.stability, 0, accuracy: 0.001, "two agreeing sources: switch at the track change itself")
+        XCTAssertGreaterThan(
+            RateSwitchingPolicy.gatePolicy(for: .appleMusicCurrentTrack).stability,
+            0,
+            "an unconfirmed report must still settle before the device is switched"
+        )
+    }
+
     func testStaleAudioQueueCandidateKeepsConservativePersistenceWindow() {
         let policy = RateSwitchingPolicy.gatePolicy(for: .staleAudioQueueLog)
 
