@@ -72,9 +72,18 @@ before the listed end and plays both songs at once, so the end-of-track timer
 never gets to fire and there is no silence for the dropout to land in; only the
 instant switch at the change applies.
 
-Status (September 2026): the instant switch and the arming of the end-of-track
-timer have been observed on real playback. The timer actually firing has so far
-only been exercised by the unit tests, because AutoMix pre-empted it each time.
+A seek makes Music re-create the playing track's own decoder, which would
+otherwise overwrite the forecast with the playing track's rate. Seeks are
+detected from the jump in reported position, and a same-rate decoder line that
+coincides with one leaves the existing forecast alone. The log store query that
+produces the forecast takes ~0.7 s and runs on its own queue, so it can never
+delay a switch.
+
+Status (September 2026): the end-of-track timer and the instant switch have both
+been observed on real playback with Song Transitions off. The timer switched with
+0.3 s of the song left and the next song started clean, with no switch inside it.
+Keeping the forecast across a seek, and the separate query queue, are covered by
+unit tests and a clean build but had not yet been watched working when pushed.
 
 Only natural track endings are covered by the timer. A manual skip cannot be anticipated and
 still switches a second or two in, as does a wrong forecast (e.g. the queue was
