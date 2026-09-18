@@ -1,3 +1,5 @@
+> **Fork notice:** this is a modified fork of [BiKing567/RateSync](https://github.com/BiKing567/RateSync) (September 2026). See [FORK_NOTES.md](FORK_NOTES.md) for what differs from upstream.
+
 <p align="center">
   <img width="200" alt="RateSync Icon" src="./RateSync_Icon.png">
 </p>

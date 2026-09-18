@@ -1,3 +1,6 @@
+> **Fork / 分支说明：** 本仓库是 [BiKing567/RateSync](https://github.com/BiKing567/RateSync) 的修改版（2026 年 9 月）。改动见 [FORK_NOTES.md](FORK_NOTES.md)。
+> This is a modified fork (September 2026); see [FORK_NOTES.md](FORK_NOTES.md) for what differs.
+
 <p align="center">
   <img width="200" alt="RateSync Icon" src="./RateSync_Icon.png">
 </p>
