@@ -22,7 +22,7 @@ class MenuBarController {
     // Lazy so the updater is only started once the app is fully up
     // (SPUStandardUpdaterController starts SPUUpdater on init).
     @ObservationIgnored
-    lazy var updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    lazy var updaterController = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
     
     init() {
         let outputDevices = OutputDevices()
