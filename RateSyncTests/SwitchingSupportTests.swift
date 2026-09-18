@@ -25,6 +25,24 @@ final class SwitchingSupportTests: XCTestCase {
         )
     }
 
+    func testAppleMusicCurrentTrackRateSettlesFasterThanLogsButResistsOverride() {
+        let policy = RateSwitchingPolicy.gatePolicy(for: .appleMusicCurrentTrack)
+        let logPolicy = RateSwitchingPolicy.gatePolicy(for: .decoderLog)
+
+        XCTAssertLessThan(
+            policy.stability,
+            logPolicy.stability,
+            "Music's own answer for the playing track is not exposed to the next-track decoder pre-buffer race"
+        )
+        XCTAssertGreaterThan(policy.stability, 0, "a single read must never be enough to switch the device")
+        XCTAssertEqual(
+            policy.lockedOverride,
+            logPolicy.lockedOverride,
+            accuracy: 0.001,
+            "once applied for a track it should be as hard to override as any other source"
+        )
+    }
+
     func testStaleAudioQueueCandidateKeepsConservativePersistenceWindow() {
         let policy = RateSwitchingPolicy.gatePolicy(for: .staleAudioQueueLog)
 

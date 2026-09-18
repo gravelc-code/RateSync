@@ -454,9 +454,60 @@ class OutputDevices: ObservableObject {
         }
     }
 
+    // Fork change (not in upstream BiKing567/RateSync). For Apple Music, ask Music itself for the
+    // CURRENT track's sample rate before consulting decoder logs. Music keeps
+    // several ALAC decoders alive at once - it pre-buffers the next track for
+    // gapless playback - and the log lines carry no track identity, so the
+    // newest "Input format" line is frequently the NEXT track's format.
+    // `sample rate of current track` is by definition about the playing track.
+    // Logs remain the fallback when AppleScript is unavailable, or still has
+    // no rate once the grace window after a track change has passed (streamed
+    // tracks report "missing value" for their first few seconds).
+    private static let appleMusicCurrentTrackGrace: TimeInterval = 6.0
+
+    private func runLogChain(expectedTrack: MediaTrack?, recursion: Bool) {
+        guard isAppleMusicSource, appleMusic.isRunning else {
+            runLogChainFromLogs(expectedTrack: expectedTrack, recursion: recursion)
+            return
+        }
+        appleMusic.fetchPlaybackState { [weak self] state in
+            guard let self else { return }
+            self.processQueue.async {
+                guard self.isExpectedTrackCurrent(expectedTrack) else {
+                    Logger.switching.info("stale switch task after Apple Music current-track check, skip")
+                    return
+                }
+                if let state, state.isPlaying {
+                    if let sampleRate = state.sampleRate, sampleRate > 0 {
+                        let stat = CMPlayerStats(
+                            sampleRate: sampleRate,
+                            bitDepth: self.previousBitDepth ?? 24,
+                            date: Date()
+                        )
+                        Logger.switching.info("[AM CurrentTrack] Music reports \(sampleRate, privacy: .public) Hz for the playing track")
+                        self.applyStats([stat], source: .appleMusicCurrentTrack, expectedTrack: expectedTrack, recursion: recursion)
+                        return
+                    }
+                    let sinceTrackChange = self.lastTrackChangeDate.map {
+                        Date().timeIntervalSince($0)
+                    } ?? .infinity
+                    if sinceTrackChange < Self.appleMusicCurrentTrackGrace {
+                        Logger.switching.info("[AM CurrentTrack] no rate from Music yet (\(sinceTrackChange, privacy: .public)s into track), waiting")
+                        self.processQueue.asyncAfter(deadline: .now() + 0.5) {
+                            self.switchLatestSampleRate(for: expectedTrack, recursion: true)
+                        }
+                        return
+                    }
+                    Logger.switching.info("[AM CurrentTrack] Music has no rate for this track, falling back to decoder logs")
+                }
+                self.runLogChainFromLogs(expectedTrack: expectedTrack, recursion: recursion)
+            }
+        }
+    }
+
     /// Log-based rate resolution plus the preset fallback, run after the
     /// MediaRemote probe reported nothing (or was skipped).
-    private func runLogChain(expectedTrack: MediaTrack?, recursion: Bool) {
+    private func runLogChainFromLogs(expectedTrack: MediaTrack?, recursion: Bool) {
         let logStats = self.statsFromLogs(recursion: recursion)
         if isAppleMusicSource {
             rememberAppleMusicFormat(from: logStats)
