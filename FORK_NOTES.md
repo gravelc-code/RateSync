@@ -43,10 +43,49 @@ players are unaffected. See `runLogChain` in `Quality/OutputDevices.swift` and
 Known gap: a track for which Music never reports a rate still goes through the
 log chain and can still be misread.
 
-### 2. Sparkle auto-update is disabled
+### 2. Apple Music: switch just before the track ends, not 1-2 s into the next one
+
+A rate change always costs a short dropout while the device re-clocks. Upstream
+(and change 1 on its own) can only act once the new track is already playing, so
+the dropout lands a second or two into the song.
+
+The next-track decoder line that caused the bug in change 1 is, read the other
+way round, a forecast: once the playing track's rate comes from Music itself, the
+newest decoder format logged since the track began is the NEXT track's. The fork
+remembers it, and when Music reports under 6 s left it schedules the switch for
+0.6 s before the end, re-reading the exact position from Music when the timer
+fires so that a seek or pause since arming can never cause a mid-song switch.
+It then holds the new rate until the track changes (or 6 s pass). Consecutive
+tracks at different rates come from different masters, so no gapless continuity
+is lost, and the final half second of a song is almost always fade or silence.
+
+The same forecast also removes the wait at the track change itself. Music reports
+the new track's rate within ~20 ms of the change when it had pre-buffered it; if
+that report matches the forecast, two independent sources agree and the device is
+switched at once instead of after the 2 s settling gate
+(`RateSource.appleMusicConfirmedForecast`). That covers the "next" button, and any
+boundary the timer could not anticipate.
+
+**Turn off Music's Song Transitions (AutoMix / crossfade) for this to work as
+intended.** With transitions on, Music moves to the next track a variable 5-30 s
+before the listed end and plays both songs at once, so the end-of-track timer
+never gets to fire and there is no silence for the dropout to land in; only the
+instant switch at the change applies.
+
+Status (September 2026): the instant switch and the arming of the end-of-track
+timer have been observed on real playback. The timer actually firing has so far
+only been exercised by the unit tests, because AutoMix pre-empted it each time.
+
+Only natural track endings are covered by the timer. A manual skip cannot be anticipated and
+still switches a second or two in, as does a wrong forecast (e.g. the queue was
+edited after Music pre-buffered). See `PreBoundarySwitchPolicy` in
+`Quality/RateSwitchingPolicy.swift` and the "switch just before the track ends"
+section of `Quality/OutputDevices.swift`.
+
+### 3. Sparkle auto-update is disabled
 
 `SUFeedURL` is removed and the updater is not started. Upstream's feed would
-replace a build of this fork with upstream's release, silently dropping change 1.
+replace a build of this fork with upstream's release, silently dropping changes 1 and 2.
 Update by pulling and rebuilding instead.
 
 ## Building
