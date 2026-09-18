@@ -109,6 +109,43 @@ final class SwitchingSupportTests: XCTestCase {
         )
     }
 
+    func testSeekDoesNotDiscardAValidNextTrackForecast() {
+        // Held forecast 44.1 kHz, playing 48 kHz, new line is the playing track's own rate.
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.forecastUpdate(heldRate: 44_100, newRate: 48_000, playingRate: 48_000, lineAge: 0.3, secondsBetweenLineAndSeek: nil),
+            .decideLater,
+            "the update that reveals a seek arrives after the decoder line"
+        )
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.forecastUpdate(heldRate: 44_100, newRate: 48_000, playingRate: 48_000, lineAge: 1.5, secondsBetweenLineAndSeek: 0.18),
+            .keepExisting
+        )
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.forecastUpdate(heldRate: 44_100, newRate: 48_000, playingRate: 48_000, lineAge: 1.5, secondsBetweenLineAndSeek: nil),
+            .replace,
+            "no seek: the queue changed and the next track is now the same rate"
+        )
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.forecastUpdate(heldRate: 44_100, newRate: 96_000, playingRate: 48_000, lineAge: 0.1, secondsBetweenLineAndSeek: 0.1),
+            .replace,
+            "a line at a different rate cannot be the playing track's own decoder"
+        )
+        XCTAssertEqual(
+            PreBoundarySwitchPolicy.forecastUpdate(heldRate: nil, newRate: 48_000, playingRate: 48_000, lineAge: 0.1, secondsBetweenLineAndSeek: 0.1),
+            .replace
+        )
+    }
+
+    func testSeekDetectionIgnoresNormalPlaybackAndPauses() {
+        XCTAssertFalse(PreBoundarySwitchPolicy.isSeek(previousElapsed: 10, previousTimestamp: 100, previousRate: 1, elapsed: 13.1, timestamp: 103))
+        XCTAssertTrue(PreBoundarySwitchPolicy.isSeek(previousElapsed: 10, previousTimestamp: 100, previousRate: 1, elapsed: 290, timestamp: 103))
+        XCTAssertTrue(PreBoundarySwitchPolicy.isSeek(previousElapsed: 200, previousTimestamp: 100, previousRate: 1, elapsed: 5, timestamp: 101))
+        XCTAssertFalse(
+            PreBoundarySwitchPolicy.isSeek(previousElapsed: 50, previousTimestamp: 100, previousRate: 0, elapsed: 50, timestamp: 160),
+            "resuming after a long pause is not a seek"
+        )
+    }
+
     func testStaleAudioQueueCandidateKeepsConservativePersistenceWindow() {
         let policy = RateSwitchingPolicy.gatePolicy(for: .staleAudioQueueLog)
 

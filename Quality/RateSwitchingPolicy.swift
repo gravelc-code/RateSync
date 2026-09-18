@@ -256,6 +256,44 @@ enum PreBoundarySwitchPolicy {
         return duration - position - readingAge
     }
 
+    enum ForecastUpdate: Equatable {
+        case replace
+        case keepExisting
+        case decideLater
+    }
+
+    /// A seek makes Music re-create the PLAYING track's decoder, which then
+    /// looks like the newest decoder line. It says nothing about the next
+    /// track, whose pre-buffered decoder Music leaves alone, so it must not
+    /// overwrite a forecast that is still valid. Only a same-rate line can be
+    /// the playing track's own; the now-playing update that reveals the seek
+    /// arrives ~0.2 s after the line, hence `decideLater` for very fresh lines.
+    static func forecastUpdate(
+        heldRate: Double?,
+        newRate: Double,
+        playingRate: Double,
+        lineAge: TimeInterval,
+        secondsBetweenLineAndSeek: TimeInterval?
+    ) -> ForecastUpdate {
+        guard let heldRate, heldRate != playingRate, newRate == playingRate else { return .replace }
+        if lineAge < seekEvidenceDelay { return .decideLater }
+        if let gap = secondsBetweenLineAndSeek, abs(gap) <= seekMatchWindow { return .keepExisting }
+        return .replace
+    }
+
+    static let seekEvidenceDelay: TimeInterval = 1.0
+    static let seekMatchWindow: TimeInterval = 2.0
+    /// A position that differs from the extrapolated one by more than this is a seek.
+    static let seekJumpThreshold: TimeInterval = 2.0
+
+    static func isSeek(
+        previousElapsed: Double, previousTimestamp: Double, previousRate: Double,
+        elapsed: Double, timestamp: Double
+    ) -> Bool {
+        let expected = previousElapsed + (timestamp - previousTimestamp) * previousRate
+        return abs(elapsed - expected) > seekJumpThreshold
+    }
+
     /// True when the format pre-buffered during the previous track matches
     /// what Music now reports for the playing track.
     static func forecastConfirms(forecastRate: Double?, reportedRate: Double) -> Bool {

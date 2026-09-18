@@ -53,6 +53,15 @@ class OutputDevices: ObservableObject {
     /// The forecast made during the PREVIOUS track, i.e. about the track that
     /// is playing now. Lets a matching report from Music skip the settling gate.
     private var incomingForecast: CMPlayerStats?
+    /// Position reported by the last now-playing update, to spot seeks.
+    private var lastPlaybackAnchor: (elapsed: Double, timestamp: Double, rate: Double)?
+    private var lastSeekDate: Date?
+    private var lastDismissedDecoderDate: Date?
+    /// The log store query takes ~0.7 s. It runs here so it can never hold up
+    /// processQueue, where a track change or the end-of-track timer must be
+    /// handled within milliseconds.
+    private let forecastQueue = DispatchQueue(label: "RateSync.forecast", qos: .utility)
+    private var forecastQueryInFlight = false
     private var preBoundaryWorkItem: DispatchWorkItem?
     private var preBoundaryArmedTrack: MediaTrack?
     private var preBoundaryHold: (track: MediaTrack, until: Date)?
@@ -523,7 +532,7 @@ class OutputDevices: ObservableObject {
                         // Gate re-evaluations run every 0.5 s; only the regular
                         // evaluations are worth a query.
                         if !recursion {
-                            self.harvestNextTrackPrediction()
+                            self.harvestNextTrackPrediction(currentTrackRate: sampleRate)
                         }
                         self.armPreBoundarySwitchIfNeeded(state: state, currentTrackRate: sampleRate)
                         return
@@ -551,13 +560,40 @@ class OutputDevices: ObservableObject {
     /// current one starts. With the playing track's rate now coming from
     /// Music itself, that log line stops being a hazard and becomes a
     /// forecast: the newest decoder format since this track began.
-    private func harvestNextTrackPrediction() {
+    private func harvestNextTrackPrediction(currentTrackRate: Double) {
+        guard !forecastQueryInFlight, let track = currentTrack else { return }
+        forecastQueryInFlight = true
+        forecastQueue.async { [weak self] in
+            guard let self else { return }
+            let newest = self.getAllStats().first
+            self.processQueue.async {
+                self.forecastQueryInFlight = false
+                guard self.currentTrack == track, let newest else { return }
+                self.considerForecast(newest, currentTrackRate: currentTrackRate)
+            }
+        }
+    }
+
+    private func considerForecast(_ newest: CMPlayerStats, currentTrackRate: Double) {
         guard let trackStart = lastTrackChangeDate,
-              let newest = getAllStats().first,
               newest.date > trackStart,
               newest.sampleRate > 0,
-              newest.sampleRate <= RateSwitchingPolicy.maxPlausibleSampleRate else { return }
-        if predictedNextFormat?.date != newest.date {
+              newest.sampleRate <= RateSwitchingPolicy.maxPlausibleSampleRate,
+              predictedNextFormat?.date != newest.date,
+              lastDismissedDecoderDate != newest.date else { return }
+        switch PreBoundarySwitchPolicy.forecastUpdate(
+            heldRate: predictedNextFormat?.sampleRate,
+            newRate: newest.sampleRate,
+            playingRate: currentTrackRate,
+            lineAge: Date().timeIntervalSince(newest.date),
+            secondsBetweenLineAndSeek: lastSeekDate.map { $0.timeIntervalSince(newest.date) }
+        ) {
+        case .decideLater:
+            return
+        case .keepExisting:
+            lastDismissedDecoderDate = newest.date
+            Logger.switching.info("[PreSwitch] decoder re-created by a seek, keeping forecast \(self.predictedNextFormat?.sampleRate ?? 0, privacy: .public) Hz")
+        case .replace:
             Logger.switching.info("[PreSwitch] newest decoder since track start: \(newest.sampleRate, privacy: .public) Hz / \(newest.bitDepth, privacy: .public) bit (the next track, if it differs from the playing one)")
             predictedNextFormat = newest
         }
@@ -1208,6 +1244,25 @@ class OutputDevices: ObservableObject {
         self.previousTrack = self.currentTrack
         self.currentTrack = MediaTrack(trackInfo: newTrack)
         let trackChanged = self.previousTrack != self.currentTrack
+        // Fork change: a jump in the reported position is a seek (see harvestNextTrackPrediction).
+        let payload = newTrack.payload
+        if let elapsedMicros = payload.elapsedTimeMicros, let timestampMicros = payload.timestampEpochMicros {
+            let elapsed = elapsedMicros / 1_000_000
+            let timestamp = timestampMicros / 1_000_000
+            if !trackChanged, let anchor = lastPlaybackAnchor,
+               PreBoundarySwitchPolicy.isSeek(
+                   previousElapsed: anchor.elapsed, previousTimestamp: anchor.timestamp, previousRate: anchor.rate,
+                   elapsed: elapsed, timestamp: timestamp
+               ) {
+                lastSeekDate = eventDate ?? Date()
+                Logger.switching.info("[PreSwitch] seek detected")
+            }
+            let rate = payload.playbackRate ?? ((payload.isPlaying ?? true) ? 1 : 0)
+            lastPlaybackAnchor = (elapsed, timestamp, rate)
+        }
+        if trackChanged {
+            lastSeekDate = nil
+        }
         let sharedTrack = RateSyncWidgetConfiguration.loadNowPlayingTrack()
         let widgetMetadataChanged = sharedTrack?.title != newTrack.payload.title
             || sharedTrack?.artist != newTrack.payload.artist
