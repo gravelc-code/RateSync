@@ -431,12 +431,30 @@ class OutputDevices: ObservableObject {
     // sink by a few hundred ms. Such a line is not applied; the chain looks
     // again shortly, so the switch lands at the start of the track rather
     // than on the next 2-3 s poll.
+    //
+    // Nothing is applied unless TIDAL's log says it is playing. Otherwise a
+    // Now Playing event from a paused TIDAL (which "All Apps" arbitration can
+    // accept once the playing app has been quiet for 15 s, i.e. mid-song in
+    // Apple Music) would switch the device to TIDAL's last rate, under
+    // whatever is actually playing.
     private func runTidalChain(expectedTrack: MediaTrack?) {
-        guard let format = TidalPlayerLog.newestSinkFormat() else {
+        let sinceTrackChange = lastTrackChangeDate.map { Date().timeIntervalSince($0) } ?? .infinity
+        guard let snapshot = TidalPlayerLog.snapshot(),
+              let format = snapshot.newestSink else {
             Logger.switching.info("[TIDAL] no sink line in player.log")
             return
         }
-        let sinceTrackChange = lastTrackChangeDate.map { Date().timeIntervalSince($0) } ?? .infinity
+        guard snapshot.isPlaying else {
+            // At a track change TIDAL logs stopped/paused before "active";
+            // look again briefly. Later, the 3 s poll keeps checking.
+            if sinceTrackChange < TidalSwitchPolicy.waitForNewLine {
+                processQueue.asyncAfter(deadline: .now() + TidalSwitchPolicy.recheckInterval) {
+                    self.switchLatestSampleRate(for: expectedTrack, recursion: true)
+                }
+            }
+            Logger.switching.info("[TIDAL] not playing, leaving the device alone")
+            return
+        }
         if TidalSwitchPolicy.lineMayBePreviousTrack(
             lineDate: format.date,
             trackChangeDate: lastTrackChangeDate,

@@ -796,6 +796,27 @@ final class SwitchingSupportTests: XCTestCase {
         XCTAssertNil(TidalPlayerLog.newestSinkFormat(at: url.appendingPathExtension("missing")))
     }
 
+    func testTidalSnapshotIsPlayingOnlyWhenNewestStateIsActive() {
+        let sink = "[2026-11-26 11:02:21.700] [tisoc] [debug] [pcm_sink_coreaudio.cpp:35] CoreaudioSink::open, rate: 192000, type: int24"
+        let active = #"[2026-11-26 11:02:21.961] [tisoc] [debug] [client.hpp:37] SIGNAL: {"signal": "media.state", "state": "active", "url": "https://example"}"#
+        let paused = #"[2026-11-26 11:05:00.000] [tisoc] [debug] [client.hpp:37] SIGNAL: {"signal": "media.state", "state": "paused", "url": "https://example"}"#
+
+        let playing = TidalPlayerLog.parseSnapshot([sink, active].joined(separator: "\n"))
+        XCTAssertTrue(playing.isPlaying)
+        XCTAssertEqual(playing.newestSink?.sampleRate, 192_000)
+
+        let pausedLater = TidalPlayerLog.parseSnapshot([sink, active, paused].joined(separator: "\n"))
+        XCTAssertFalse(
+            pausedLater.isPlaying,
+            "a paused TIDAL must never switch the device under another player"
+        )
+        XCTAssertEqual(pausedLater.newestSink?.sampleRate, 192_000)
+
+        XCTAssertFalse(TidalPlayerLog.parseSnapshot(sink).isPlaying, "no state logged means not known to be playing")
+        XCTAssertEqual(TidalPlayerLog.playbackState(inLine: paused), "paused")
+        XCTAssertNil(TidalPlayerLog.playbackState(inLine: sink))
+    }
+
     func testTidalLineFromBeforeTrackChangeIsHeldBackOnlyBriefly() {
         let change = Date(timeIntervalSince1970: 1_000)
 

@@ -30,6 +30,12 @@ struct TidalSinkFormat: Equatable {
     let date: Date
 }
 
+struct TidalPlayerSnapshot: Equatable {
+    let newestSink: TidalSinkFormat?
+    /// True only when TIDAL's newest logged playback state is "active".
+    let isPlaying: Bool
+}
+
 enum TidalPlayerLog {
     static let defaultURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/TIDAL/player.log")
@@ -53,6 +59,40 @@ enum TidalPlayerLog {
     static func newestSinkFormat(at url: URL = defaultURL) -> TidalSinkFormat? {
         guard let text = readTail(of: url) else { return nil }
         return parse(text).last
+    }
+
+    /// The newest sink format plus whether TIDAL is playing right now, from
+    /// one read of `url`. Nil when the file is missing or unreadable.
+    static func snapshot(at url: URL = defaultURL) -> TidalPlayerSnapshot? {
+        guard let text = readTail(of: url) else { return nil }
+        return parseSnapshot(text)
+    }
+
+    static func parseSnapshot(_ text: String) -> TidalPlayerSnapshot {
+        var sink: TidalSinkFormat?
+        var state: String?
+        for line in text.split(whereSeparator: \.isNewline) {
+            let line = String(line)
+            if let format = parseLine(line) {
+                sink = format
+            } else if let newState = playbackState(inLine: line) {
+                state = newState
+            }
+        }
+        return TidalPlayerSnapshot(newestSink: sink, isPlaying: state == "active")
+    }
+
+    private static let stateMarker = "\"signal\": \"media.state\", \"state\": \""
+
+    /// TIDAL logs every playback state change, e.g.
+    /// `SIGNAL: {"signal": "media.state", "state": "active", "url": ...}`.
+    /// Seen states: active, paused, stopped, completed.
+    static func playbackState(inLine line: String) -> String? {
+        guard let start = line.range(of: stateMarker)?.upperBound,
+              let end = line[start...].firstIndex(of: "\"") else {
+            return nil
+        }
+        return String(line[start..<end])
     }
 
     /// All sink formats in `text`, oldest first.

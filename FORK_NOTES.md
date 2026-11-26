@@ -113,6 +113,13 @@ older than the track change is held back for up to 4 s while the new one is
 awaited (`TidalSwitchPolicy`), so the old track's rate is never applied to the
 new track.
 
+Nothing is switched unless TIDAL's newest logged `media.state` is `active`. With
+All Apps selected, a lower-priority app's Now Playing event can take over once
+the playing app has been quiet for 15 s, which in Apple Music is mid-song; without
+this check, an event from a paused TIDAL would switch the device to TIDAL's last
+rate under the Apple Music track. The Apple Music path itself (changes 1 and 2)
+is untouched.
+
 TIDAL must be selected as the monitoring source (or All Apps). Not needed, and
 not used, when TIDAL's own Exclusive Mode is on: TIDAL then sets the rate itself.
 
