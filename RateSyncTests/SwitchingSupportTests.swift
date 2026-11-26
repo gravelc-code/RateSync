@@ -297,7 +297,8 @@ final class SwitchingSupportTests: XCTestCase {
                 PlayerProfile.qqMusic.bundleIdentifier,
                 PlayerProfile.appleMusic.bundleIdentifier,
                 PlayerProfile.spotify.bundleIdentifier,
-                PlayerProfile.neteaseMusic.bundleIdentifier
+                PlayerProfile.neteaseMusic.bundleIdentifier,
+                PlayerProfile.tidal.bundleIdentifier
             ]
         )
     }
@@ -408,7 +409,7 @@ final class SwitchingSupportTests: XCTestCase {
     func testMonitoringSourcesExposeTheirLocalizationKeys() {
         XCTAssertEqual(
             PlayerProfile.monitoringSources.map(\.localizationKey),
-            ["Apple Music", "Spotify", "NetEase Music", "QQ Music"]
+            ["Apple Music", "Spotify", "NetEase Music", "QQ Music", "TIDAL"]
         )
     }
 
@@ -724,5 +725,101 @@ final class SwitchingSupportTests: XCTestCase {
             "1. Apple Music",
             "Player priority rows must show the player name instead of only the order number."
         )
+    }
+
+    // MARK: - Fork change: TIDAL
+
+    func testTidalProfileReadsItsPlayerLog() {
+        let profile = PlayerProfile.profile(for: "com.tidal.desktop")
+
+        XCTAssertEqual(profile?.formatDetection, .tidalPlayerLog)
+        XCTAssertTrue(PlayerProfile.monitoringSources.contains(.tidal))
+        XCTAssertEqual(
+            PlayerProfile.normalizedPriority([]).last,
+            "com.tidal.desktop",
+            "TIDAL is appended to the priority list without reordering existing players"
+        )
+    }
+
+    func testTidalSinkLineParsesRateDepthAndTimestamp() throws {
+        let line = "[2026-11-26 10:38:54.782] [tisoc] [debug] [pcm_sink_coreaudio.cpp:35] CoreaudioSink::open, rate: 96000, type: int24"
+
+        let format = try XCTUnwrap(TidalPlayerLog.parseLine(line))
+
+        XCTAssertEqual(format.sampleRate, 96_000)
+        XCTAssertEqual(format.bitDepth, 24)
+        let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second, .nanosecond], from: format.date)
+        XCTAssertEqual(components.year, 2026)
+        XCTAssertEqual(components.month, 11)
+        XCTAssertEqual(components.day, 26)
+        XCTAssertEqual(components.hour, 10)
+        XCTAssertEqual(components.minute, 38)
+        XCTAssertEqual(components.second, 54)
+        XCTAssertEqual(Double(components.nanosecond ?? 0) / 1e9, 0.782, accuracy: 0.002)
+    }
+
+    func testTidalParserTakesNewestSinkLineAndIgnoresOtherLines() {
+        let log = """
+        [2026-11-26 10:37:02.314] [tisoc] [debug] [pcm_sink_coreaudio.cpp:35] CoreaudioSink::open, rate: 176400, type: int24
+        [2026-11-26 10:37:04.184] [tisoc] [debug] [factory.cpp:70] AudioDecoderFactory::create - got stream format flac
+        [2026-11-26 10:37:04.459] [tisoc] [debug] [pcm_sink_coreaudio.cpp:35] CoreaudioSink::open, rate: 44100, type: int16
+        [2026-11-26 10:39:05.704] [tisoc] [debug] [desktop_console.cpp:129] COMMAND: {"command":"media.preload"}
+        [2026-11-26 10:39:05.780] [tisoc] [debug] [pcm_sink_coreaudio.cpp:35] CoreaudioSink::open, rate: 96000, type: int24
+        [2026-11-26 10:39:05.919] [tisoc] [debug] [pcm_sink_coreaudio.cpp:207] CoreaudioSink::start
+        """
+
+        let formats = TidalPlayerLog.parse(log)
+
+        XCTAssertEqual(formats.map(\.sampleRate), [176_400, 44_100, 96_000])
+        XCTAssertEqual(formats.map(\.bitDepth), [24, 16, 24])
+    }
+
+    func testTidalParserRejectsMalformedSinkLines() {
+        XCTAssertNil(TidalPlayerLog.parseLine("CoreaudioSink::open, rate: 96000, type: int24"))
+        XCTAssertNil(TidalPlayerLog.parseLine("[2026-11-26 10:38:54.782] CoreaudioSink::open, rate: 0, type: int24"))
+        XCTAssertNil(TidalPlayerLog.parseLine("[not a date] CoreaudioSink::open, rate: 96000, type: int24"))
+        XCTAssertEqual(TidalPlayerLog.bitDepth(forSampleType: "float32"), 32)
+        XCTAssertNil(TidalPlayerLog.bitDepth(forSampleType: "pcm"))
+    }
+
+    func testTidalNewestSinkFormatReadsTailOfFile() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tidal-\(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: url) }
+        // Pad past the tail window so only the end of the file is read.
+        var text = String(repeating: "[2026-11-26 09:00:00.000] [tisoc] [info] padding padding padding\n", count: 6_000)
+        text += "[2026-11-26 10:00:00.000] [tisoc] [debug] [pcm_sink_coreaudio.cpp:35] CoreaudioSink::open, rate: 48000, type: int24\n"
+        text += "[2026-11-26 10:05:00.000] [tisoc] [debug] [pcm_sink_coreaudio.cpp:35] CoreaudioSink::open, rate: 96000, type: int24\n"
+        try text.write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertGreaterThan(text.utf8.count, TidalPlayerLog.tailBytes)
+
+        XCTAssertEqual(TidalPlayerLog.newestSinkFormat(at: url)?.sampleRate, 96_000)
+        XCTAssertNil(TidalPlayerLog.newestSinkFormat(at: url.appendingPathExtension("missing")))
+    }
+
+    func testTidalLineFromBeforeTrackChangeIsHeldBackOnlyBriefly() {
+        let change = Date(timeIntervalSince1970: 1_000)
+
+        XCTAssertTrue(
+            TidalSwitchPolicy.lineMayBePreviousTrack(lineDate: change.addingTimeInterval(-180), trackChangeDate: change, sinceTrackChange: 0.5),
+            "the previous track's sink line must not be applied to the new track"
+        )
+        XCTAssertFalse(
+            TidalSwitchPolicy.lineMayBePreviousTrack(lineDate: change.addingTimeInterval(-1), trackChangeDate: change, sinceTrackChange: 0.5),
+            "a line written just before a late MediaRemote event belongs to the new track"
+        )
+        XCTAssertFalse(
+            TidalSwitchPolicy.lineMayBePreviousTrack(lineDate: change.addingTimeInterval(-180), trackChangeDate: change, sinceTrackChange: 5),
+            "a same-rate gapless change writes no new line, so stop waiting for one"
+        )
+        XCTAssertFalse(
+            TidalSwitchPolicy.lineMayBePreviousTrack(lineDate: change.addingTimeInterval(-180), trackChangeDate: nil, sinceTrackChange: .infinity)
+        )
+    }
+
+    func testTidalSinkLineUsesFastGate() {
+        let policy = RateSwitchingPolicy.gatePolicy(for: .tidalPlayerLog)
+
+        XCTAssertEqual(policy.boundary, 0)
+        XCTAssertLessThan(policy.lockedOverride, 1)
     }
 }

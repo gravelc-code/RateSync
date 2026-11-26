@@ -91,6 +91,35 @@ edited after Music pre-buffered). See `PreBoundarySwitchPolicy` in
 `Quality/RateSwitchingPolicy.swift` and the "switch just before the track ends"
 section of `Quality/OutputDevices.swift`.
 
+### 4. TIDAL support
+
+Upstream does not monitor TIDAL (`com.tidal.desktop`) at all, so in TIDAL's
+default shared output mode the device stays at whatever rate it had and
+CoreAudio resamples: a 96 kHz/24-bit track played through a USB DAC left at
+44.1 kHz. TIDAL reports no format through MediaRemote or the unified log, but
+its player helper writes one line to `~/Library/Logs/TIDAL/player.log` each time
+it opens its CoreAudio output for a track:
+
+```
+[2026-11-26 10:38:54.782] [tisoc] [debug] [pcm_sink_coreaudio.cpp:35] CoreaudioSink::open, rate: 96000, type: int24
+```
+
+The fork reads the end of that file and switches to the newest line's rate
+(`Quality/TidalPlayerLog.swift`, `runTidalChain` in `Quality/OutputDevices.swift`).
+TIDAL opens the sink only for the track it is about to play (a `media.preload`
+of the next track does not), so the newest line is the playing track's; a
+gapless change at the same rate writes no new line, and none is needed. A line
+older than the track change is held back for up to 4 s while the new one is
+awaited (`TidalSwitchPolicy`), so the old track's rate is never applied to the
+new track.
+
+TIDAL must be selected as the monitoring source (or All Apps). Not needed, and
+not used, when TIDAL's own Exclusive Mode is on: TIDAL then sets the rate itself.
+
+Status (November 2026): observed switching a Fosi ZH3 from 44.1 to 96 kHz for a
+96 kHz track. Switching at track changes between different rates is covered by
+unit tests but had not yet been watched on real playback.
+
 ### 3. Sparkle auto-update is disabled
 
 `SUFeedURL` is removed and the updater is not started. Upstream's feed would

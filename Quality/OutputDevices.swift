@@ -383,7 +383,13 @@ class OutputDevices: ObservableObject {
         // Fast-path for NetEase / QQ: independent AudioQueue chain.
         // These apps never report NowPlaying sampleRate and do not need the
         // Apple Music priority dance (which costs AppleScript + 1.0s probe timeout).
-        if let profile = PlayerProfile.profile(for: Self.resolveBundleIdentifier(track: currentTrack)),
+        let sourceProfile = PlayerProfile.profile(for: Self.resolveBundleIdentifier(track: currentTrack))
+        // Fork change: TIDAL's rate comes only from its own player.log.
+        if sourceProfile?.formatDetection == .tidalPlayerLog {
+            self.runTidalChain(expectedTrack: expectedTrack)
+            return
+        }
+        if let profile = sourceProfile,
            profile.formatDetection == .audioQueueLogs {
             Logger.switching.info("[FastPath] \(profile.bundleIdentifier, privacy: .public) -> direct AudioQueue chain")
             self.runLogChain(expectedTrack: expectedTrack, recursion: recursion)
@@ -416,6 +422,37 @@ class OutputDevices: ObservableObject {
                 )
             }
         }
+    }
+
+    // Fork change: TIDAL. The newest `CoreaudioSink::open` line in TIDAL's
+    // player.log is the playing track's format (see TidalPlayerLog.swift).
+    // Right after a track change that line can still be the previous
+    // track's, because the MediaRemote event may beat TIDAL opening the new
+    // sink by a few hundred ms. Such a line is not applied; the chain looks
+    // again shortly, so the switch lands at the start of the track rather
+    // than on the next 2-3 s poll.
+    private func runTidalChain(expectedTrack: MediaTrack?) {
+        guard let format = TidalPlayerLog.newestSinkFormat() else {
+            Logger.switching.info("[TIDAL] no sink line in player.log")
+            return
+        }
+        let sinceTrackChange = lastTrackChangeDate.map { Date().timeIntervalSince($0) } ?? .infinity
+        if TidalSwitchPolicy.lineMayBePreviousTrack(
+            lineDate: format.date,
+            trackChangeDate: lastTrackChangeDate,
+            sinceTrackChange: sinceTrackChange
+        ) {
+            Logger.switching.info("[TIDAL] newest sink line (\(format.sampleRate, privacy: .public) Hz) predates the track change, looking again in 0.3s")
+            processQueue.asyncAfter(deadline: .now() + TidalSwitchPolicy.recheckInterval) {
+                self.switchLatestSampleRate(for: expectedTrack, recursion: true)
+            }
+            return
+        }
+        Logger.switching.info("[TIDAL] sink format \(format.sampleRate, privacy: .public) Hz / \(format.bitDepth, privacy: .public) bit")
+        let stat = CMPlayerStats(sampleRate: format.sampleRate, bitDepth: format.bitDepth, date: format.date)
+        // recursion: true - this chain does its own re-checking, and the
+        // 3 s poll covers the rest; applyStats' one-shot retry is not needed.
+        applyStats([stat], source: .tidalPlayerLog, expectedTrack: expectedTrack, recursion: true)
     }
 
     private func applyAppleMusicPriorityOrMediaRemote(

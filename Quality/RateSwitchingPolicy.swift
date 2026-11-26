@@ -22,6 +22,8 @@ enum RateSource {
     case audioQueueLog
     case staleAudioQueueLog
     case preset
+    /// Fork change: TIDAL's sink format from its player.log.
+    case tidalPlayerLog
 }
 
 struct RateGatePolicy {
@@ -45,7 +47,9 @@ enum RateSwitchingPolicy {
 
     static func gatePolicy(for source: RateSource) -> RateGatePolicy {
         switch source {
-        case .audioQueueLog:
+        case .audioQueueLog, .tidalPlayerLog:
+            // TIDAL writes one sink line per track it plays, like an
+            // AudioQueue "New output" line: fresh, unambiguous evidence.
             return .audioQueue
         case .appleMusicFormatLog:
             return .appleMusicFormat
@@ -397,5 +401,29 @@ enum AudioFormatSelector {
         return formatsAtTargetRate.first {
             $0.mSampleRate == targetRate && $0.mBitsPerChannel == closestBitDepth
         }
+    }
+}
+
+/// Fork change: deciding whether TIDAL's newest sink line can be trusted for
+/// the track that is playing (see TidalPlayerLog.swift).
+enum TidalSwitchPolicy {
+    /// The new track's sink line may be written this long BEFORE the track
+    /// change is recorded (MediaRemote events can lag). The previous track's
+    /// line is normally minutes old, so this cannot mistake it for the new one
+    /// unless tracks are skipped faster than this.
+    static let lineLeadTolerance: TimeInterval = 2.5
+    /// Stop waiting for a new line after this long: a gapless transition at
+    /// the same rate may keep the sink open and never write one.
+    static let waitForNewLine: TimeInterval = 4.0
+    static let recheckInterval: TimeInterval = 0.3
+
+    static func lineMayBePreviousTrack(
+        lineDate: Date,
+        trackChangeDate: Date?,
+        sinceTrackChange: TimeInterval
+    ) -> Bool {
+        guard let trackChangeDate else { return false }
+        guard sinceTrackChange < waitForNewLine else { return false }
+        return lineDate < trackChangeDate.addingTimeInterval(-lineLeadTolerance)
     }
 }

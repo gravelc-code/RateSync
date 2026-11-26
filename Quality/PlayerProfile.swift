@@ -4,6 +4,8 @@ struct PlayerProfile: Equatable, Identifiable {
     enum FormatDetection: Equatable {
         case mediaRemoteThenLogs
         case audioQueueLogs
+        /// Fork change: the player's own text log file (TIDAL's player.log).
+        case tidalPlayerLog
     }
 
     let bundleIdentifier: String
@@ -45,7 +47,17 @@ struct PlayerProfile: Equatable, Identifiable {
         fallbackSampleRate: nil
     )
 
-    static let monitoringSources = [appleMusic, spotify, neteaseMusic, qqMusic]
+    /// Fork change: TIDAL reports no format via MediaRemote or the unified
+    /// log; see TidalPlayerLog.swift.
+    static let tidal = PlayerProfile(
+        bundleIdentifier: "com.tidal.desktop",
+        localizationKey: "TIDAL",
+        processName: "TIDAL",
+        formatDetection: .tidalPlayerLog,
+        fallbackSampleRate: nil
+    )
+
+    static let monitoringSources = [appleMusic, spotify, neteaseMusic, qqMusic, tidal]
 
     /// Default takeover order used when the user selects "All Apps".
     /// Keeping Apple Music first preserves the behaviour users already had

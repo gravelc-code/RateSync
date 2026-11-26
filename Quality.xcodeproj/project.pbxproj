@@ -55,6 +55,8 @@
 		BFA0003B2E10000100320001 /* TrackEventIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA0003C2E10000100320001 /* TrackEventIdentity.swift */; };
 		BFA0003F2E10000100320001 /* AppleMusicFormatParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA0003E2E10000100320001 /* AppleMusicFormatParser.swift */; };
 		BFA000402E10000100320001 /* AppleMusicFormatParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA0003E2E10000100320001 /* AppleMusicFormatParser.swift */; };
+		BFA000512E10000100320001 /* TidalPlayerLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA000502E10000100320001 /* TidalPlayerLog.swift */; };
+		BFA000522E10000100320001 /* TidalPlayerLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFA000502E10000100320001 /* TidalPlayerLog.swift */; };
 		BFA000442E10000100320001 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = BFA000432E10000100320001 /* Localizable.strings */; };
 /* End PBXBuildFile section */
 
@@ -137,6 +139,7 @@
 		BFA000352E10000100320001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		BFA0003C2E10000100320001 /* TrackEventIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackEventIdentity.swift; sourceTree = "<group>"; };
 		BFA0003E2E10000100320001 /* AppleMusicFormatParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicFormatParser.swift; sourceTree = "<group>"; };
+		BFA000502E10000100320001 /* TidalPlayerLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TidalPlayerLog.swift; sourceTree = "<group>"; };
 		BFA000412E10000100320001 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		BFA000422E10000100320001 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -231,6 +234,7 @@
 				BF5A88A02E0F00000032F001 /* MediaRemoteSampleRateProbe.swift */,
 				BFA0003C2E10000100320001 /* TrackEventIdentity.swift */,
 				BFA0003E2E10000100320001 /* AppleMusicFormatParser.swift */,
+				BFA000502E10000100320001 /* TidalPlayerLog.swift */,
 				127C972C281FCF000087313B /* AppVersion.swift */,
 				BF7E0D08296336DA009FFEEC /* AudioStreamBasicDescription+Equatable.swift */,
 				BF0C90C92B20C163002F99C9 /* ScriptableApplicationCommand.swift */,
@@ -440,6 +444,7 @@
 				BFA000202E10000100320001 /* SharedAudioFormat.swift in Sources */,
 				BFA0003A2E10000100320001 /* TrackEventIdentity.swift in Sources */,
 				BFA0003F2E10000100320001 /* AppleMusicFormatParser.swift in Sources */,
+				BFA000512E10000100320001 /* TidalPlayerLog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -455,6 +460,7 @@
 				BFA000212E10000100320001 /* SharedAudioFormat.swift in Sources */,
 				BFA0003B2E10000100320001 /* TrackEventIdentity.swift in Sources */,
 				BFA000402E10000100320001 /* AppleMusicFormatParser.swift in Sources */,
+				BFA000522E10000100320001 /* TidalPlayerLog.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
