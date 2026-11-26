@@ -49,7 +49,9 @@ class Defaults: ObservableObject {
         self.userPreferIconStatusBarItem = UserDefaults.standard.bool(forKey: kUserPreferIconStatusBarItem)
         self.userPreferBitDepthDetection = UserDefaults.standard.bool(forKey: kUserPreferBitDepthDetection)
         self.userPreferSampleRateMultiples = UserDefaults.standard.bool(forKey: kUserPreferSampleRateMultiples)
-        self.monitoredBundleIdentifier = UserDefaults.standard.string(forKey: kMonitoredBundleIdentifier)
+        self.monitoredBundleIdentifier = PlayerProfile.monitoredBundleIdentifier(
+            fromStored: UserDefaults.standard.string(forKey: kMonitoredBundleIdentifier)
+        )
         let storedPriority = UserDefaults.standard.array(forKey: kPlayerPriorityBundleIdentifiers) as? [String] ?? []
         self.playerPriorityBundleIdentifiers = PlayerProfile.normalizedPriority(storedPriority)
         let storedLockBundleIdentifier = UserDefaults.standard.string(forKey: kTemporarySourceLockBundleIdentifier)
@@ -108,11 +110,12 @@ class Defaults: ObservableObject {
     /// `nil` means monitor every app that reports Now Playing info.
     @Published var monitoredBundleIdentifier: String? {
         willSet {
-            if let newValue = newValue {
-                UserDefaults.standard.set(newValue, forKey: kMonitoredBundleIdentifier)
-            } else {
-                UserDefaults.standard.removeObject(forKey: kMonitoredBundleIdentifier)
-            }
+            // Fork change: All Apps (nil) is stored explicitly, not by
+            // removing the key - see PlayerProfile.allAppsStoredValue.
+            UserDefaults.standard.set(
+                PlayerProfile.storedMonitoredValue(for: newValue),
+                forKey: kMonitoredBundleIdentifier
+            )
         }
     }
 

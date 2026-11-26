@@ -822,4 +822,39 @@ final class SwitchingSupportTests: XCTestCase {
         XCTAssertEqual(policy.boundary, 0)
         XCTAssertLessThan(policy.lockedOverride, 1)
     }
+
+    // MARK: - Fork change: All Apps survives a restart
+
+    func testAllAppsMonitoringRoundTripsThroughStorage() {
+        let stored = PlayerProfile.storedMonitoredValue(for: nil)
+
+        XCTAssertNil(
+            PlayerProfile.monitoredBundleIdentifier(fromStored: stored),
+            "All Apps must read back as All Apps, not fall back to the registered Apple Music default"
+        )
+    }
+
+    func testSpecificMonitoredSourceRoundTripsThroughStorage() {
+        let stored = PlayerProfile.storedMonitoredValue(for: PlayerProfile.tidal.bundleIdentifier)
+
+        XCTAssertEqual(PlayerProfile.monitoredBundleIdentifier(fromStored: stored), "com.tidal.desktop")
+    }
+
+    func testAllAppsSurvivesRelaunchWithAppleMusicRegisteredAsDefault() throws {
+        let suiteName = "RateSyncTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let key = "monitored"
+        defaults.register(defaults: [key: PlayerProfile.appleMusic.bundleIdentifier])
+
+        // Fresh install: the registered default applies.
+        XCTAssertEqual(
+            PlayerProfile.monitoredBundleIdentifier(fromStored: defaults.string(forKey: key)),
+            PlayerProfile.appleMusic.bundleIdentifier
+        )
+
+        defaults.set(PlayerProfile.storedMonitoredValue(for: nil), forKey: key)
+
+        XCTAssertNil(PlayerProfile.monitoredBundleIdentifier(fromStored: defaults.string(forKey: key)))
+    }
 }

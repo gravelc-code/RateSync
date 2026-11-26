@@ -80,6 +80,22 @@ struct PlayerProfile: Equatable, Identifiable {
         return result
     }
 
+    /// Fork change: how the monitored source is stored in UserDefaults.
+    /// `nil` (All Apps) used to be stored by REMOVING the key, which made the
+    /// registered default - Apple Music - come back on the next launch, so
+    /// All Apps never survived a restart. It is now stored as this explicit
+    /// value instead; a missing key still means the default (Apple Music).
+    static let allAppsStoredValue = ""
+
+    static func storedMonitoredValue(for bundleIdentifier: String?) -> String {
+        bundleIdentifier ?? allAppsStoredValue
+    }
+
+    static func monitoredBundleIdentifier(fromStored stored: String?) -> String? {
+        guard let stored, stored != allAppsStoredValue else { return nil }
+        return stored
+    }
+
     static func profile(for bundleIdentifier: String?) -> PlayerProfile? {
         monitoringSources.first { $0.bundleIdentifier == bundleIdentifier }
     }
